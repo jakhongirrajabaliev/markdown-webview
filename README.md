@@ -1,4 +1,9 @@
+## Installation
 
+### Swift Package Manager
+```swift
+https://github.com/jakhongirrajabaliev/markdown-webview
+```
 ### Display Markdown Content
 
 ```swift
