@@ -15,6 +15,7 @@ import WebKit
         let linkActivationHandler: ((URL) -> Void)?
         let renderedContentHandler: ((String) -> Void)?
         let enableBenchmarking: Bool
+        let fontSize: CGFloat
         let loggingTag = String(
             (0..<5).map { _ in
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
@@ -99,10 +100,12 @@ import WebKit
         public init(
             _ markdownContent: String,
             customStylesheet: String? = nil,
+            fontSize: CGFloat = 15,
             enableBenchmarking: Bool = false
         ) {
             self.markdownContent = markdownContent
             self.customStylesheet = customStylesheet
+            self.fontSize = fontSize
             self.enableBenchmarking = enableBenchmarking
             linkActivationHandler = nil
             renderedContentHandler = nil
@@ -111,12 +114,14 @@ import WebKit
         init(
             _ markdownContent: String,
             customStylesheet: String?,
+            fontSize: CGFloat = 15,
             linkActivationHandler: ((URL) -> Void)?,
             renderedContentHandler: ((String) -> Void)?,
             enableBenchmarking: Bool
         ) {
             self.markdownContent = markdownContent
             self.customStylesheet = customStylesheet
+            self.fontSize = fontSize
             self.linkActivationHandler = linkActivationHandler
             self.renderedContentHandler = renderedContentHandler
             self.enableBenchmarking = enableBenchmarking
@@ -130,13 +135,23 @@ import WebKit
             }
         #elseif os(iOS)
             public func makeUIView(context: Context) -> CustomWebView {
-                context.coordinator.platformView
+                let view = context.coordinator.platformView
+                view.fontSize = fontSize // Set the initial font size
+                return view
             }
         #endif
 
         func updatePlatformView(_ platformView: CustomWebView, context _: Context) {
             guard !platformView.isLoading else { return }
-            platformView.updateMarkdownContent(markdownContent)
+            let js = """
+                    document.getElementById('markdown-rendered').style.fontSize = '\(fontSize)px';
+                    """
+            platformView.evaluateJavaScript(js, completionHandler: nil)
+            
+            // Only update content if it changed
+            if platformView.lastMarkdownContent != markdownContent {
+                platformView.updateMarkdownContent(markdownContent)
+            }
         }
 
         #if os(macOS)
@@ -145,7 +160,8 @@ import WebKit
             }
         #elseif os(iOS)
             public func updateUIView(_ uiView: CustomWebView, context: Context) {
-                updatePlatformView(uiView, context: context)
+                uiView.fontSize = fontSize  // Use uiView instead of platformView
+                uiView.updateMarkdownContent(markdownContent)
             }
         #endif
 
@@ -340,7 +356,8 @@ import WebKit
 
         public class CustomWebView: WKWebView {
             var contentHeight: CGFloat = 0
-
+            var fontSize: CGFloat = 15
+            var lastMarkdownContent: String = ""
             override public var intrinsicContentSize: CGSize {
                 .init(width: super.intrinsicContentSize.width, height: contentHeight)
             }
@@ -390,12 +407,20 @@ import WebKit
             #endif
 
             func updateMarkdownContent(_ markdownContent: String) {
+                lastMarkdownContent = markdownContent
                 guard
                     let markdownContentBase64Encoded = markdownContent.data(using: .utf8)?
                         .base64EncodedString()
                 else { return }
+                
+                // First update the font size
+                let js = """
+                document.getElementById('markdown-rendered').style.fontSize = '\(fontSize)px';
+                window.updateWithMarkdownContentBase64Encoded(`\(markdownContentBase64Encoded)`);
+                """
+                
                 callAsyncJavaScript(
-                    "window.updateWithMarkdownContentBase64Encoded(`\(markdownContentBase64Encoded)`)",
+                    js,
                     in: nil, in: .page, completionHandler: nil)
             }
         }
