@@ -160,6 +160,7 @@ import WebKit
             }
         #elseif os(iOS)
             public func updateUIView(_ uiView: CustomWebView, context: Context) {
+                context.coordinator.parent = self
                 uiView.fontSize = fontSize  // Use uiView instead of platformView
                 uiView.updateMarkdownContent(markdownContent)
             }
@@ -182,7 +183,7 @@ import WebKit
         }
 
         public class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-            let parent: MarkdownWebView
+            var parent: MarkdownWebView
             let platformView: CustomWebView
             var startTime: CFAbsoluteTime?
             private var timerStartTimes: [String: Double] = [:]
@@ -262,7 +263,10 @@ import WebKit
                         "Swift Benchmark - \(parent.loggingTag) - WebView Load Duration: \(swiftBenchmarks["WebView Did Finish"]! - swiftBenchmarks["After HTML Load"]!)s"
                     )
                 }
-                (webView as! CustomWebView).updateMarkdownContent(parent.markdownContent)
+                // Render the newest content: chunks that arrived while the HTML
+                // was still loading were only stored, never executed.
+                let view = webView as! CustomWebView
+                view.updateMarkdownContent(view.hasPendingContent ? view.lastMarkdownContent : parent.markdownContent)
             }
 
             public func webView(_: WKWebView, decidePolicyFor navigationAction: WKNavigationAction)
@@ -358,6 +362,7 @@ import WebKit
             var contentHeight: CGFloat = 0
             var fontSize: CGFloat = 15
             var lastMarkdownContent: String = ""
+            var hasPendingContent = false
             override public var intrinsicContentSize: CGSize {
                 .init(width: super.intrinsicContentSize.width, height: contentHeight)
             }
@@ -408,6 +413,13 @@ import WebKit
 
             func updateMarkdownContent(_ markdownContent: String) {
                 lastMarkdownContent = markdownContent
+                // Page still loading: window.updateWithMarkdownContentBase64Encoded is undefined,
+                // so defer until didFinish instead of silently dropping this update.
+                if isLoading {
+                    hasPendingContent = true
+                    return
+                }
+                hasPendingContent = false
                 guard
                     let markdownContentBase64Encoded = markdownContent.data(using: .utf8)?
                         .base64EncodedString()
