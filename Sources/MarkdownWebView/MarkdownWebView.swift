@@ -504,15 +504,26 @@ import WebKit
                     else { return }
                     self.selectedText = text
                     self.selectedHTML = dict["html"] as? String ?? ""
-                    self.interaction?.presentEditMenu(
-                        with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+                    // Let WebKit's content view own the selection so it supplies suggestedActions.
+                    webView.becomeFirstResponder()
+                    // WebKit syncs the new selection asynchronously; present after it lands so
+                    // the system actions (Copy, Look Up, ...) validate instead of being hidden.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.interaction?.presentEditMenu(
+                            with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+                    }
                 }
             }
 
             func editMenuInteraction(
                 _: UIEditMenuInteraction, menuFor _: UIEditMenuConfiguration,
-                suggestedActions _: [UIMenuElement]
+                suggestedActions: [UIMenuElement]
             ) -> UIMenu? {
+                // Reuse WebKit's own edit menu (Copy, Look Up, Translate, ...) when it is
+                // offered, so double tap matches the menu shown after dragging the handles.
+                if !suggestedActions.isEmpty {
+                    return UIMenu(children: suggestedActions)
+                }
                 let title = Bundle(for: UIApplication.self)
                     .localizedString(forKey: "Copy", value: "Copy", table: nil)
                 let copy = UIAction(title: title, image: UIImage(systemName: "doc.on.doc")) {
