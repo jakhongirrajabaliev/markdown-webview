@@ -219,6 +219,7 @@ import WebKit
 
                 #if os(iOS)
                     platformView.scrollView.isScrollEnabled = false
+                    platformView.enableDoubleTapCopy()
                 #endif
 
                 #if os(macOS)
@@ -389,6 +390,14 @@ import WebKit
                     nextResponder?.flagsChanged(with: event)
                 }
             #elseif os(iOS)
+                // Keeps the double-tap → Copy menu handler alive (iOS 16+).
+                private var doubleTapCopyHandler: AnyObject?
+
+                func enableDoubleTapCopy() {
+                    guard #available(iOS 16.0, *), doubleTapCopyHandler == nil else { return }
+                    doubleTapCopyHandler = DoubleTapCopyHandler(webView: self)
+                }
+
                 override public func pressesBegan(
                     _ presses: Set<UIPress>, with event: UIPressesEvent?
                 ) {
@@ -437,6 +446,104 @@ import WebKit
             }
         }
     }
+
+    #if os(iOS)
+        /// Double tap selects the word under the finger and shows an edit menu with a
+        /// single Copy action that writes HTML + RTF + plain text to the pasteboard.
+        @available(iOS 16.0, *)
+        final class DoubleTapCopyHandler: NSObject, UIGestureRecognizerDelegate,
+            UIEditMenuInteractionDelegate
+        {
+            private weak var webView: WKWebView?
+            private var interaction: UIEditMenuInteraction?
+            private var selectedText = ""
+            private var selectedHTML = ""
+
+            init(webView: WKWebView) {
+                self.webView = webView
+                super.init()
+
+                let tap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+                tap.numberOfTapsRequired = 2
+                tap.cancelsTouchesInView = false
+                tap.delaysTouchesEnded = false
+                tap.delegate = self
+                webView.addGestureRecognizer(tap)
+
+                let interaction = UIEditMenuInteraction(delegate: self)
+                webView.addInteraction(interaction)
+                self.interaction = interaction
+            }
+
+            func gestureRecognizer(
+                _: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer
+            ) -> Bool { true }
+
+            @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+                guard let webView, gesture.state == .ended else { return }
+                let point = gesture.location(in: webView)
+                // Select the word at the tap point and return its text + HTML fragment.
+                let js = """
+                    (function () {
+                      const range = document.caretRangeFromPoint(\(point.x), \(point.y));
+                      if (!range) { return null; }
+                      if (range.expand) { range.expand('word'); }
+                      const sel = window.getSelection();
+                      sel.removeAllRanges();
+                      sel.addRange(range);
+                      const text = sel.toString();
+                      if (!text.trim()) { sel.removeAllRanges(); return null; }
+                      const div = document.createElement('div');
+                      div.appendChild(range.cloneContents());
+                      return { text: text, html: div.innerHTML };
+                    })();
+                    """
+                webView.evaluateJavaScript(js) { [weak self] result, _ in
+                    guard let self, let dict = result as? [String: Any],
+                        let text = dict["text"] as? String
+                    else { return }
+                    self.selectedText = text
+                    self.selectedHTML = dict["html"] as? String ?? ""
+                    self.interaction?.presentEditMenu(
+                        with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+                }
+            }
+
+            func editMenuInteraction(
+                _: UIEditMenuInteraction, menuFor _: UIEditMenuConfiguration,
+                suggestedActions _: [UIMenuElement]
+            ) -> UIMenu? {
+                let title = Bundle(for: UIApplication.self)
+                    .localizedString(forKey: "Copy", value: "Copy", table: nil)
+                let copy = UIAction(title: title, image: UIImage(systemName: "doc.on.doc")) {
+                    [weak self] _ in self?.copySelection()
+                }
+                return UIMenu(children: [copy])
+            }
+
+            private func copySelection() {
+                var item: [String: Any] = ["public.utf8-plain-text": selectedText]
+                if !selectedHTML.isEmpty, let htmlData = selectedHTML.data(using: .utf8) {
+                    item["public.html"] = htmlData
+                    // RTF for apps that don't read HTML (Pages, Mail composer, etc.).
+                    if let attributed = try? NSAttributedString(
+                        data: htmlData,
+                        options: [
+                            .documentType: NSAttributedString.DocumentType.html,
+                            .characterEncoding: String.Encoding.utf8.rawValue,
+                        ],
+                        documentAttributes: nil),
+                        let rtf = try? attributed.data(
+                            from: NSRange(location: 0, length: attributed.length),
+                            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+                    {
+                        item["public.rtf"] = rtf
+                    }
+                }
+                UIPasteboard.general.setItems([item])
+            }
+        }
+    #endif
 #endif
 
 extension String {
