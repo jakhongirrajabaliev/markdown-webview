@@ -219,6 +219,9 @@ import WebKit
 
                 #if os(iOS)
                     platformView.scrollView.isScrollEnabled = false
+                    // Embedded in a host scroll view: never let UIKit add safe-area insets,
+                    // otherwise blank space appears above the content and the bottom is clipped.
+                    platformView.scrollView.contentInsetAdjustmentBehavior = .never
                     platformView.enableDoubleTapCopy()
                 #endif
 
